@@ -1,5 +1,7 @@
 import Foundation
 import AVFoundation
+import UIKit
+import WebKit
 import Capacitor
 
 extension UIColor {
@@ -164,22 +166,22 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
     public let identifier = "VideoRecorder"
     public let jsName = "VideoRecorder"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "initialize", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "destroy", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "flipCamera", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "toggleFlash", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "enableFlash", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "disableFlash", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "isFlashAvailable", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "isFlashEnabled", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "addPreviewFrameConfig", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "editPreviewFrameConfig", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "switchToPreviewFrame", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "showPreviewFrame", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "hidePreviewFrame", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "startRecording", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "stopRecording", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "getDuration", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "initialize", returnType: .promise),
+        CAPPluginMethod(name: "destroy", returnType: .promise),
+        CAPPluginMethod(name: "flipCamera", returnType: .promise),
+        CAPPluginMethod(name: "toggleFlash", returnType: .promise),
+        CAPPluginMethod(name: "enableFlash", returnType: .promise),
+        CAPPluginMethod(name: "disableFlash", returnType: .promise),
+        CAPPluginMethod(name: "isFlashAvailable", returnType: .promise),
+        CAPPluginMethod(name: "isFlashEnabled", returnType: .promise),
+        CAPPluginMethod(name: "addPreviewFrameConfig", returnType: .promise),
+        CAPPluginMethod(name: "editPreviewFrameConfig", returnType: .promise),
+        CAPPluginMethod(name: "switchToPreviewFrame", returnType: .promise),
+        CAPPluginMethod(name: "showPreviewFrame", returnType: .promise),
+        CAPPluginMethod(name: "hidePreviewFrame", returnType: .promise),
+        CAPPluginMethod(name: "startRecording", returnType: .promise),
+        CAPPluginMethod(name: "stopRecording", returnType: .promise),
+        CAPPluginMethod(name: "getDuration", returnType: .promise),
     ]
 
     var capWebView: WKWebView!

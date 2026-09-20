@@ -1,0 +1,8 @@
+root = true
+
+# Only Kotlin is configured here. Prettier also reads this file, so a catch-all section would change how
+# the JavaScript and TypeScript sources are formatted.
+[*.{kt,kts}]
+ktlint_code_style = android_studio
+indent_size = 4
+max_line_length = 140

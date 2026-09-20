@@ -9,6 +9,8 @@ capacitor plugin to record video
 
 ## Install
 
+This fork requires the forked Kotlin/Swift Capacitor runtime (Capacitor 8), iOS 17 and Android 13 (API 33).
+
 Capacitor v7
 
 ```bash
