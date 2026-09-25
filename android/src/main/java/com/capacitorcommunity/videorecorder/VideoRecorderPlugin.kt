@@ -21,6 +21,7 @@ import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
+import com.getcapacitor.PluginException
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
@@ -365,8 +366,7 @@ public class VideoRecorderPlugin : Plugin() {
             // The id is required. Leaving it out throws, as it always did.
             val layerId = call.getString("id")!!
             if (layerId.isEmpty()) {
-                call.reject("Must provide layer id")
-                return
+                throw PluginException("Must provide layer id")
             }
 
             val config = FrameConfig(call.data)
@@ -387,8 +387,7 @@ public class VideoRecorderPlugin : Plugin() {
             // The id is required. Leaving it out throws, as it always did.
             val layerId = call.getString("id")!!
             if (layerId.isEmpty()) {
-                call.reject("Must provide layer id")
-                return
+                throw PluginException("Must provide layer id")
             }
 
             val updatedConfig = FrameConfig(call.data)
@@ -396,7 +395,8 @@ public class VideoRecorderPlugin : Plugin() {
 
             if (currentFrameConfig.id == layerId) {
                 currentFrameConfig = updatedConfig
-                updateCameraView(currentFrameConfig)
+                // The preview is a view: lay it out on the main thread, as the other callers do
+                activity.runOnUiThread { updateCameraView(updatedConfig) }
             }
 
             call.resolve()
@@ -409,18 +409,13 @@ public class VideoRecorderPlugin : Plugin() {
             // The id is required. Leaving it out throws, as it always did.
             val layerId = call.getString("id")!!
             if (layerId.isEmpty()) {
-                call.reject("Must provide layer id")
-                return
+                throw PluginException("Must provide layer id")
             }
-            val existingConfig = previewFrameConfigs[layerId]
-            if (existingConfig != null) {
-                if (existingConfig.id != currentFrameConfig.id) {
-                    currentFrameConfig = existingConfig
-                    updateCameraView(currentFrameConfig)
-                }
-            } else {
-                call.reject("Frame config does not exist")
-                return
+            val existingConfig = previewFrameConfigs[layerId] ?: throw PluginException("Frame config does not exist")
+            if (existingConfig.id != currentFrameConfig.id) {
+                currentFrameConfig = existingConfig
+                // The preview is a view: lay it out on the main thread, as the other callers do
+                activity.runOnUiThread { updateCameraView(existingConfig) }
             }
             call.resolve()
         }
