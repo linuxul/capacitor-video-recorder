@@ -99,30 +99,40 @@ class CameraView: UIView {
     }
 }
 
-public func checkAuthorizationStatus(_ call: CAPPluginCall) -> Bool {
+/// Throws the error initialize rejects with when the camera or the microphone may not be used.
+func checkAuthorizationStatus() throws {
     let videoStatus = AVCaptureDevice.authorizationStatus(for: AVMediaType.video)
-    if (videoStatus == AVAuthorizationStatus.restricted) {
-        call.reject("Camera access restricted")
-        return false
+    if videoStatus == AVAuthorizationStatus.restricted {
+        throw CAPPluginError("Camera access restricted")
     } else if videoStatus == AVAuthorizationStatus.denied {
-        call.reject("Camera access denied")
-        return false
+        throw CAPPluginError("Camera access denied")
     }
     let audioStatus = AVCaptureDevice.authorizationStatus(for: AVMediaType.audio)
-    if (audioStatus == AVAuthorizationStatus.restricted) {
-        call.reject("Microphone access restricted")
-        return false
+    if audioStatus == AVAuthorizationStatus.restricted {
+        throw CAPPluginError("Microphone access restricted")
     } else if audioStatus == AVAuthorizationStatus.denied {
-        call.reject("Microphone access denied")
-        return false
+        throw CAPPluginError("Microphone access denied")
     }
-    return true
 }
 
 enum CaptureError: Error {
     case backCameraUnavailable
     case frontCameraUnavailable
     case couldNotCaptureInput(error: NSError)
+
+    /// The message initialize and flipCamera reject with when `error` keeps them from using a camera.
+    static func message(for error: Error) -> String {
+        switch error {
+        case CaptureError.backCameraUnavailable:
+            return "Back camera unavailable"
+        case CaptureError.frontCameraUnavailable:
+            return "Front camera unavailable"
+        case CaptureError.couldNotCaptureInput:
+            return "Camera unavailable"
+        default:
+            return "Unexpected error"
+        }
+    }
 }
 
 /**
@@ -166,22 +176,22 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
     public let identifier = "VideoRecorder"
     public let jsName = "VideoRecorder"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "initialize", returnType: .promise),
-        CAPPluginMethod(name: "destroy", returnType: .promise),
-        CAPPluginMethod(name: "flipCamera", returnType: .promise),
-        CAPPluginMethod(name: "toggleFlash", returnType: .promise),
-        CAPPluginMethod(name: "enableFlash", returnType: .promise),
-        CAPPluginMethod(name: "disableFlash", returnType: .promise),
-        CAPPluginMethod(name: "isFlashAvailable", returnType: .promise),
-        CAPPluginMethod(name: "isFlashEnabled", returnType: .promise),
-        CAPPluginMethod(name: "addPreviewFrameConfig", returnType: .promise),
-        CAPPluginMethod(name: "editPreviewFrameConfig", returnType: .promise),
-        CAPPluginMethod(name: "switchToPreviewFrame", returnType: .promise),
-        CAPPluginMethod(name: "showPreviewFrame", returnType: .promise),
-        CAPPluginMethod(name: "hidePreviewFrame", returnType: .promise),
-        CAPPluginMethod(name: "startRecording", returnType: .promise),
-        CAPPluginMethod(name: "stopRecording", returnType: .promise),
-        CAPPluginMethod(name: "getDuration", returnType: .promise),
+        .promise("initialize", VideoRecorder.initialize),
+        .promise("destroy", VideoRecorder.destroy),
+        .promise("flipCamera", VideoRecorder.flipCamera),
+        .promise("toggleFlash", VideoRecorder.toggleFlash),
+        .promise("enableFlash", VideoRecorder.enableFlash),
+        .promise("disableFlash", VideoRecorder.disableFlash),
+        .promise("isFlashAvailable", VideoRecorder.isFlashAvailable),
+        .promise("isFlashEnabled", VideoRecorder.isFlashEnabled),
+        .promise("addPreviewFrameConfig", VideoRecorder.addPreviewFrameConfig),
+        .promise("editPreviewFrameConfig", VideoRecorder.editPreviewFrameConfig),
+        .promise("switchToPreviewFrame", VideoRecorder.switchToPreviewFrame),
+        .promise("showPreviewFrame", VideoRecorder.showPreviewFrame),
+        .promise("hidePreviewFrame", VideoRecorder.hidePreviewFrame),
+        .promise("startRecording", VideoRecorder.startRecording),
+        .promise("stopRecording", VideoRecorder.stopRecording),
+        .promise("getDuration", VideoRecorder.getDuration)
     ]
 
     var capWebView: WKWebView!
@@ -221,7 +231,10 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
      */
     public func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
         self.durationTimer?.invalidate()
-        self.stopRecordingCall?.resolve([
+        // Answer the stopRecording call once: a recording that ends later by itself has no call to answer.
+        let call = self.stopRecordingCall
+        self.stopRecordingCall = nil
+        call?.resolve([
             "videoUrl": self.bridge?.portablePath(fromLocalURL: outputFileURL)?.absoluteString as Any
         ])
     }
@@ -238,7 +251,7 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
 	* Initializes the camera.
 	* { camera: Int, quality: Int }
 	*/
-    @objc func initialize(_ call: CAPPluginCall) {
+    func initialize(_ call: CAPPluginCall) throws {
         // log to console for initializing
         print("Initializing camera")
 
@@ -253,142 +266,137 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
             }
             self.currentFrameConfig = self.previewFrameConfigs.first!
 
-            if checkAuthorizationStatus(call) {
-                DispatchQueue.main.async {
+            try checkAuthorizationStatus()
+            DispatchQueue.main.async {
+                do {
+                    // Set webview to transparent and set the app window background to white
+                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                        windowScene.windows.first?.backgroundColor = UIColor.white
+                    }
+                    self.capWebView?.isOpaque = false
+                    self.capWebView?.backgroundColor = UIColor.clear
+
+                    let deviceDescoverySession = AVCaptureDevice.DiscoverySession.init(
+                        deviceTypes: [AVCaptureDevice.DeviceType.builtInWideAngleCamera],
+                        mediaType: AVMediaType.video,
+                        position: AVCaptureDevice.Position.unspecified)
+
+                    for device in deviceDescoverySession.devices {
+                        if device.position == AVCaptureDevice.Position.back {
+                            self.backCamera = device
+                        } else if device.position == AVCaptureDevice.Position.front {
+                            self.frontCamera = device
+                        }
+                    }
+
+                    if (self.backCamera == nil) {
+                        self.currentCamera = 1
+                    }
+
+                    // Create capture session
+                    self.captureSession = AVCaptureSession()
+                    // Begin configuration
+                    self.captureSession?.beginConfiguration()
+
+                    self.captureSession?.automaticallyConfiguresApplicationAudioSession = false
+
+                    /**
+                     * Video file recording capture session
+                     */
+                    self.captureSession?.usesApplicationAudioSession = true
+                    // Add Camera Input
+                    self.cameraInput = try createCaptureDeviceInput(currentCamera: self.currentCamera, frontCamera: self.frontCamera, backCamera: self.backCamera)
+                    self.captureSession!.addInput(self.cameraInput!)
+                    // Add Microphone Input
+                    let microphone = AVCaptureDevice.default(for: .audio)
+                    if let audioInput = try? AVCaptureDeviceInput(device: microphone!), (self.captureSession?.canAddInput(audioInput))! {
+                        self.captureSession!.addInput(audioInput)
+                    }
+                    // Add Video File Output
+                    self.videoOutput = AVCaptureMovieFileOutput()
+                    self.videoOutput?.movieFragmentInterval = CMTime.invalid
+                    self.captureSession!.addOutput(self.videoOutput!)
+
+                    // Set Video quality
+                    switch(self.quality){
+                    case 1:
+                        self.captureSession?.sessionPreset = AVCaptureSession.Preset.hd1280x720
+                        break;
+                    case 2:
+                        self.captureSession?.sessionPreset = AVCaptureSession.Preset.hd1920x1080
+                        break;
+                    case 3:
+                        self.captureSession?.sessionPreset = AVCaptureSession.Preset.hd4K3840x2160
+                        break;
+                    case 4:
+                        self.captureSession?.sessionPreset = AVCaptureSession.Preset.high
+                        break;
+                    case 5:
+                        self.captureSession?.sessionPreset = AVCaptureSession.Preset.low
+                        break;
+                    case 6:
+                        self.captureSession?.sessionPreset = AVCaptureSession.Preset.cif352x288
+                        break;
+                    default:
+                        self.captureSession?.sessionPreset = AVCaptureSession.Preset.vga640x480
+                        break;
+                    }
+
+                    let connection: AVCaptureConnection? = self.videoOutput?.connection(with: .video)
+                    self.videoOutput?.setOutputSettings([AVVideoCodecKey : AVVideoCodecType.h264], for: connection!)
+
+                    // Commit configurations
+                    self.captureSession?.commitConfiguration()
+
+
                     do {
-                        // Set webview to transparent and set the app window background to white
-                        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                            windowScene.windows.first?.backgroundColor = UIColor.white
-                        }
-                        self.capWebView?.isOpaque = false
-                        self.capWebView?.backgroundColor = UIColor.clear
-
-                        let deviceDescoverySession = AVCaptureDevice.DiscoverySession.init(
-                            deviceTypes: [AVCaptureDevice.DeviceType.builtInWideAngleCamera],
-                            mediaType: AVMediaType.video,
-                            position: AVCaptureDevice.Position.unspecified)
-
-                        for device in deviceDescoverySession.devices {
-                            if device.position == AVCaptureDevice.Position.back {
-                                self.backCamera = device
-                            } else if device.position == AVCaptureDevice.Position.front {
-                                self.frontCamera = device
-                            }
-                        }
-
-                        if (self.backCamera == nil) {
-                            self.currentCamera = 1
-                        }
-
-                        // Create capture session
-                        self.captureSession = AVCaptureSession()
-                        // Begin configuration
-                        self.captureSession?.beginConfiguration()
-
-                        self.captureSession?.automaticallyConfiguresApplicationAudioSession = false
-
-                        /**
-                         * Video file recording capture session
-                         */
-                        self.captureSession?.usesApplicationAudioSession = true
-                        // Add Camera Input
-                        self.cameraInput = try createCaptureDeviceInput(currentCamera: self.currentCamera, frontCamera: self.frontCamera, backCamera: self.backCamera)
-                        self.captureSession!.addInput(self.cameraInput!)
-                        // Add Microphone Input
-                        let microphone = AVCaptureDevice.default(for: .audio)
-                        if let audioInput = try? AVCaptureDeviceInput(device: microphone!), (self.captureSession?.canAddInput(audioInput))! {
-                            self.captureSession!.addInput(audioInput)
-                        }
-                        // Add Video File Output
-                        self.videoOutput = AVCaptureMovieFileOutput()
-                        self.videoOutput?.movieFragmentInterval = CMTime.invalid
-                        self.captureSession!.addOutput(self.videoOutput!)
-
-                        // Set Video quality
-                        switch(self.quality){
-                        case 1:
-                            self.captureSession?.sessionPreset = AVCaptureSession.Preset.hd1280x720
-                            break;
-                        case 2:
-                            self.captureSession?.sessionPreset = AVCaptureSession.Preset.hd1920x1080
-                            break;
-                        case 3:
-                            self.captureSession?.sessionPreset = AVCaptureSession.Preset.hd4K3840x2160
-                            break;
-                        case 4:
-                            self.captureSession?.sessionPreset = AVCaptureSession.Preset.high
-                            break;
-                        case 5:
-                            self.captureSession?.sessionPreset = AVCaptureSession.Preset.low
-                            break;
-                        case 6:
-                            self.captureSession?.sessionPreset = AVCaptureSession.Preset.cif352x288
-                            break;
-                        default:
-                            self.captureSession?.sessionPreset = AVCaptureSession.Preset.vga640x480
-                            break;
-                        }
-
-                        let connection: AVCaptureConnection? = self.videoOutput?.connection(with: .video)
-                        self.videoOutput?.setOutputSettings([AVVideoCodecKey : AVVideoCodecType.h264], for: connection!)
-
-                        // Commit configurations
-                        self.captureSession?.commitConfiguration()
-
-
-                        do {
-                            try AVAudioSession.sharedInstance().setCategory(AVAudioSession.Category.playAndRecord, mode: AVAudioSession.Mode.default, options: [
-                                .mixWithOthers,
-                                .defaultToSpeaker,
-                                .allowBluetoothA2DP,
-                                .allowAirPlay
-                            ])
-                        } catch {
-                            print("Failed to set audio session category.")
-                        }
-                        try? AVAudioSession.sharedInstance().setActive(true)
-                        let settings = [
-                            AVSampleRateKey : 44100.0,
-                            AVFormatIDKey : kAudioFormatAppleLossless,
-                            AVNumberOfChannelsKey : 2,
-                            AVEncoderAudioQualityKey : AVAudioQuality.max.rawValue
-                            ] as [String : Any]
-                        self.audioRecorder = try AVAudioRecorder(url: URL(fileURLWithPath: "/dev/null"), settings: settings)
-                        self.audioRecorder?.isMeteringEnabled = true
-                        self.audioRecorder?.prepareToRecord()
-                        self.audioRecorder?.record()
-                        self.audioLevelTimer = Timer.scheduledTimer(timeInterval: 0.1, target: self, selector: #selector(self.levelTimerCallback(_:)), userInfo: nil, repeats: true)
-                        self.audioRecorder?.updateMeters()
-
-                        // Start running sessions
-                        self.captureSession!.startRunning()
-
-                        // Initialize camera view
-                        self.initializeCameraView()
-
-                        if autoShow {
-                            self.cameraView.isHidden = false
-                        }
-
-                    } catch CaptureError.backCameraUnavailable {
-                        call.reject("Back camera unavailable")
-                    } catch CaptureError.frontCameraUnavailable {
-                        call.reject("Front camera unavailable")
-                    } catch CaptureError.couldNotCaptureInput( _){
-                        call.reject("Camera unavailable")
+                        try AVAudioSession.sharedInstance().setCategory(AVAudioSession.Category.playAndRecord, mode: AVAudioSession.Mode.default, options: [
+                            .mixWithOthers,
+                            .defaultToSpeaker,
+                            .allowBluetoothA2DP,
+                            .allowAirPlay
+                        ])
                     } catch {
-                        call.reject("Unexpected error")
+                        print("Failed to set audio session category.")
+                    }
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    let settings = [
+                        AVSampleRateKey : 44100.0,
+                        AVFormatIDKey : kAudioFormatAppleLossless,
+                        AVNumberOfChannelsKey : 2,
+                        AVEncoderAudioQualityKey : AVAudioQuality.max.rawValue
+                        ] as [String : Any]
+                    self.audioRecorder = try AVAudioRecorder(url: URL(fileURLWithPath: "/dev/null"), settings: settings)
+                    self.audioRecorder?.isMeteringEnabled = true
+                    self.audioRecorder?.prepareToRecord()
+                    self.audioRecorder?.record()
+                    self.audioLevelTimer = Timer.scheduledTimer(timeInterval: 0.1, target: self, selector: #selector(self.levelTimerCallback(_:)), userInfo: nil, repeats: true)
+                    self.audioRecorder?.updateMeters()
+
+                    // Start running sessions
+                    self.captureSession!.startRunning()
+
+                    // Initialize camera view
+                    self.initializeCameraView()
+
+                    if autoShow {
+                        self.cameraView.isHidden = false
                     }
                     call.resolve()
+                } catch {
+                    call.reject(CaptureError.message(for: error))
                 }
             }
+        } else {
+            // The camera is initialized already. The call used to be left unanswered.
+            call.resolve()
         }
     }
 
 	/**
 	* Destroys the camera.
 	*/
-    @objc func destroy(_ call: CAPPluginCall) {
+    func destroy(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             let appDelegate = UIApplication.shared.delegate
             appDelegate?.window?!.backgroundColor = UIColor.black
@@ -425,52 +433,41 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
 	/**
 	* Toggle between the front facing and rear facing camera.
 	*/
-    @objc func flipCamera(_ call: CAPPluginCall) {
+    func flipCamera(_ call: CAPPluginCall) throws {
         if (self.captureSession != nil) {
-            var input: AVCaptureDeviceInput? = nil
+            let input: AVCaptureDeviceInput
             do {
                 self.currentCamera = self.currentCamera == 0 ? 1 : 0
                 input = try createCaptureDeviceInput(currentCamera: self.currentCamera, frontCamera: self.frontCamera, backCamera: self.backCamera)
-            } catch CaptureError.backCameraUnavailable {
-                self.currentCamera = self.currentCamera == 0 ? 1 : 0
-                call.reject("Back camera unavailable")
-            } catch CaptureError.frontCameraUnavailable {
-                self.currentCamera = self.currentCamera == 0 ? 1 : 0
-                call.reject("Front camera unavailable")
-            } catch CaptureError.couldNotCaptureInput( _) {
-                self.currentCamera = self.currentCamera == 0 ? 1 : 0
-                call.reject("Camera unavailable")
             } catch {
+                // Keep using the camera that is in use
                 self.currentCamera = self.currentCamera == 0 ? 1 : 0
-                call.reject("Unexpected error")
+                throw CAPPluginError(CaptureError.message(for: error))
             }
 
-            if (input != nil) {
-                let currentInput = self.cameraInput
-                self.captureSession?.beginConfiguration()
-                self.captureSession?.removeInput(currentInput!)
-                self.captureSession!.addInput(input!)
-                self.cameraInput = input
-                self.captureSession?.commitConfiguration()
+            let currentInput = self.cameraInput
+            self.captureSession?.beginConfiguration()
+            self.captureSession?.removeInput(currentInput!)
+            self.captureSession!.addInput(input)
+            self.cameraInput = input
+            self.captureSession?.commitConfiguration()
 
-                // Update camera view to apply correct mirroring for the new camera
-                DispatchQueue.main.async {
-                    self.updateCameraView(self.currentFrameConfig)
-                }
-
-                call.resolve();
+            // Update camera view to apply correct mirroring for the new camera
+            DispatchQueue.main.async {
+                self.updateCameraView(self.currentFrameConfig)
             }
+
+            call.resolve()
         }
     }
 
 	/**
 	* Add a camera preview frame config.
 	*/
-    @objc func addPreviewFrameConfig(_ call: CAPPluginCall) {
+    func addPreviewFrameConfig(_ call: CAPPluginCall) throws {
         if (self.captureSession != nil) {
             guard let layerId = call.getString("id") else {
-                call.reject("Must provide layer id")
-                return
+                throw CAPPluginError("Must provide layer id")
             }
 			let newFrame = FrameConfig(call.options)
 
@@ -479,7 +476,7 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
                 self.previewFrameConfigs.append(newFrame)
             }
             else {
-                self.editPreviewFrameConfig(call)
+                try self.editPreviewFrameConfig(call)
                 return
             }
 			call.resolve()
@@ -489,11 +486,10 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
 	/**
 	* Edit an existing camera frame config.
 	*/
-    @objc func editPreviewFrameConfig(_ call: CAPPluginCall) {
+    func editPreviewFrameConfig(_ call: CAPPluginCall) throws {
         if (self.captureSession != nil) {
             guard let layerId = call.getString("id") else {
-                call.reject("Must provide layer id")
-                return
+                throw CAPPluginError("Must provide layer id")
             }
 
             let updatedConfig = FrameConfig(call.options)
@@ -505,7 +501,7 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
                 self.previewFrameConfigs[index!] = updatedConfig
             }
             else {
-                self.addPreviewFrameConfig(call)
+                try self.addPreviewFrameConfig(call)
                 return
             }
 
@@ -523,11 +519,10 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
     /**
      * Switch frame configs.
      */
-    @objc func switchToPreviewFrame(_ call: CAPPluginCall) {
+    func switchToPreviewFrame(_ call: CAPPluginCall) throws {
         if (self.captureSession != nil) {
             guard let layerId = call.getString("id") else {
-                call.reject("Must provide layer id")
-                return
+                throw CAPPluginError("Must provide layer id")
             }
             DispatchQueue.main.async {
                 let existingConfig = self.previewFrameConfigs.filter( {$0.id == layerId }).first
@@ -549,7 +544,7 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
 	/**
 	* Show the camera preview frame.
 	*/
-    @objc func showPreviewFrame(_ call: CAPPluginCall) {
+    func showPreviewFrame(_ call: CAPPluginCall) {
         if (self.captureSession != nil) {
             DispatchQueue.main.async {
                 self.cameraView.isHidden = true
@@ -561,7 +556,7 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
 	/**
 	* Hide the camera preview frame.
 	*/
-    @objc func hidePreviewFrame(_ call: CAPPluginCall) {
+    func hidePreviewFrame(_ call: CAPPluginCall) {
         if (self.captureSession != nil) {
             DispatchQueue.main.async {
                 self.cameraView.isHidden = false
@@ -620,7 +615,7 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
 	/**
 	* Start recording.
 	*/
-    @objc func startRecording(_ call: CAPPluginCall) {
+    func startRecording(_ call: CAPPluginCall) {
         if (self.captureSession != nil) {
             if (!(videoOutput?.isRecording)!) {
                 let tempDir = NSURL.fileURL(withPath:NSTemporaryDirectory(), isDirectory: true)
@@ -673,7 +668,7 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
 	/**
 	* Stop recording.
 	*/
-    @objc func stopRecording(_ call: CAPPluginCall) {
+    func stopRecording(_ call: CAPPluginCall) {
         if (self.captureSession != nil) {
             if (videoOutput?.isRecording)! {
                 self.stopRecordingCall = call
@@ -699,7 +694,7 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
 	/**
 	* Get current recording duration.
 	*/
-    @objc func getDuration(_ call: CAPPluginCall) {
+    func getDuration(_ call: CAPPluginCall) {
         if (self.videoOutput!.isRecording == true) {
             let duration = self.videoOutput?.recordedDuration;
             if (duration != nil) {
@@ -712,7 +707,7 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
         }
     }
 
-    @objc func isFlashAvailable(_ call: CAPPluginCall) {
+    func isFlashAvailable(_ call: CAPPluginCall) {
         if (self.captureSession != nil) {
             let device = AVCaptureDevice.default(for: .video)
             if let device = device {
@@ -723,21 +718,21 @@ public class VideoRecorder: CAPPlugin, AVCaptureFileOutputRecordingDelegate, CAP
         }
     }
 
-    @objc func isFlashEnabled(_ call: CAPPluginCall) {
+    func isFlashEnabled(_ call: CAPPluginCall) {
         call.resolve(["isEnabled": self._isFlashEnabled])
     }
 
-    @objc func enableFlash(_ call: CAPPluginCall) {
+    func enableFlash(_ call: CAPPluginCall) {
         self._isFlashEnabled = true
         call.resolve()
     }
 
-    @objc func disableFlash(_ call: CAPPluginCall) {
+    func disableFlash(_ call: CAPPluginCall) {
         self._isFlashEnabled = false
         call.resolve()
     }
 
-    @objc func toggleFlash(_ call: CAPPluginCall) {
+    func toggleFlash(_ call: CAPPluginCall) {
         self._isFlashEnabled = !self._isFlashEnabled
         call.resolve()
     }
